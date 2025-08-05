@@ -21,5 +21,6 @@ if __name__ == "__main__":
     twoway=False
     )
     test1.set('parcels', parcels, 'parcelid','xcoord_p', 'ycoord_p')
-    df = test1.aggregate_mp('parcels', columns=['emptot_p', 'empfoo_p'], distance = 5280, num_processes=12, agg_func='sum')
-    df.write_csv(r'T:\60day-TEMP\Stefan\parcels_qmi.csv')
+    df = test1.aggregate('parcels', columns=['emptot_p', 'empfoo_p'], distance = 10560, num_processes=18, agg_func='sum')
+    print (len(df))
+    #df.write_csv(r'T:\60day-TEMP\Stefan\test_two.csv')
