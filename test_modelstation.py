@@ -42,15 +42,16 @@ if __name__ == "__main__":
         "nparks"
     ]
     network_path = Path(
-        f"C:/Users/{user_name}/Puget Sound Regional Council/GIS - Sharing/Users/Stefan/axess_data/network"
+        r"R:\e2projects_two\2023_base_year\all_streets\walk_network\output"
     )
     parcels_path = Path(
-        f"C:/Users/{user_name}/Puget Sound Regional Council/GIS - Sharing/Users/Stefan/axess_data/parcels/parcels_urbansim.txt"
+        r"R:\e2projects_two\SoundCast\Inputs\rtp_2026_2050\landuse\2023\23_on_23_v3\parcels_urbansim.txt"
     )
 
     # Set city_name to None to run all parcels, but this takes a lot of RAM.
-    city_name = 'Shorline'
-    num_processes = 1
+    city_name = None
+    num_processes = 20
+    distance = 5280
 
     # pandas
     edges = pd.read_csv(network_path / "all_streets_links.csv")
@@ -65,7 +66,7 @@ if __name__ == "__main__":
         parcels = get_parcels_for_city(parcels, city_name)
 
     # create an instance of axess.network
-    parcels = parcels.head(400000)
+    #parcels = parcels.head(400000)
     pandas_test = Network(
         node_id=nodes["node_id"],
         node_x=nodes["x"],
@@ -76,24 +77,24 @@ if __name__ == "__main__":
         twoway=False,
     )
 
-    # associate parcels with axess.network instance using register_dataset
-    # single process
+    # associate parcels with axess.network instance using set.
+    # TO Do: should we change the name of 'set' to something more desc?
     pandas_test.register_dataset("parcels", parcels, "parcelid", "xcoord_p", "ycoord_p")
     df = pandas_test.aggregate(
         "parcels",
         columns=agg_columns,
-        distance=2640,
+        distance=distance,
         num_processes=1,
         agg_func="sum",
     )
 
-    # pandas MP test
-    pandas_test.register_dataset("parcels_mp", parcels, "parcelid", "xcoord_p", "ycoord_p")
+    #pandas MP test
+    #pandas_test.register_dataset("parcels_mp", parcels, "parcelid", "xcoord_p", "ycoord_p")
     df_mp = pandas_test.aggregate(
-        "parcels_mp",
+        "parcels",
         columns=agg_columns,
-        distance=2640,
-        num_processes=2,
+        distance=distance,
+        num_processes=num_processes,
         agg_func="sum",
     )
     

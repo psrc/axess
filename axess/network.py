@@ -9,6 +9,7 @@ import time
 from multiprocessing import Pool, freeze_support
 import numpy as np
 from dataclasses import dataclass
+import polars as pl
 
 # class dataset(NamedTuple):
 #     """a docstring"""
@@ -133,7 +134,7 @@ class Network:
 
         if name not in self.registered_data:
             raise ValueError(f"Data set '{name}' not found.")
-        data_agg = self.registered_data[name]
+        registered_dataset = self.registered_data[name]
         data = []
         arr = arr["node_id"].unique().to_numpy()
 
@@ -150,17 +151,17 @@ class Network:
             data, schema=["node_id", "target_node_id", "distance"]
         )
 
-        # only keep the target nodes that are in the data_agg.df
+        # only keep the target nodes that are in the registered_dataset.df
         reachble_nodes = reachble_nodes.filter(
-            pl.col("target_node_id").is_in(data_agg.df["node_id"])
+            pl.col("target_node_id").is_in(registered_dataset.df["node_id"])
         )
 
-        # get the data_agg.df and aggregate by node_id because multiple points 
+        # get the registered_dataset.df and aggregate by node_id because multiple points 
         # of data could be associated with the same node. Need to aggregate their 
         # attributes of interest before joining to reachble_nodes
 
         data_to_aggregate = pl.DataFrame(
-            data_agg.df.select([data_agg.id_col, "node_id"] + columns)
+            registered_dataset.df.select([registered_dataset.id_col, "node_id"] + columns)
         )
         aggregated_to_nodes = data_to_aggregate.group_by("node_id").agg(**agg_dict)
 
@@ -174,20 +175,21 @@ class Network:
 
         # aggregate attributes by node_id. performs aggregation of data for all reachable nodes.
         reachble_nodes = reachble_nodes.group_by("node_id").agg(**agg_dict)
-        return data_to_aggregate.select([data_agg.id_col, "node_id"]).join(
+        return data_to_aggregate.select([registered_dataset.id_col, "node_id"]).join(
             reachble_nodes, on="node_id", how="inner"
         )
 
     @timer_func
     def aggregate(self, name, columns, distance, num_processes=1, agg_func="sum"):
         start_time = time.perf_counter()
-        data_agg = self.registered_data[name]
+        registered_dataset = self.registered_data[name]
         if num_processes == 1:
-            arr = self.registered_data[name].select([data_agg.id_col, "node_id"])
-            return self._aggregate_run(name, columns, distance, arr, agg_func)
+            arr = registered_dataset.df.select([registered_dataset.id_col, "node_id"])
+            df = self._aggregate_run(name, columns, distance, arr, agg_func)
+            return df.sort(pl.col(registered_dataset.id_col))
 
         else:
-            df = data_agg.df.to_pandas()
+            df = registered_dataset.df.to_pandas()
             df = pd.DataFrame(df["node_id"].unique(), columns=["node_id"])
             df_chunked = np.array_split(df, num_processes)
 
@@ -200,7 +202,7 @@ class Network:
                 results = pool.starmap(self._aggregate_run, args_list)
 
             merged_df = pl.concat(results)
-            merged_df = merged_df.sort.pl.col(data_agg.id_col)
+            merged_df = merged_df.sort(pl.col(registered_dataset.id_col))
 
             end_time = time.perf_counter()
             elapsed_time = end_time - start_time
