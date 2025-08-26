@@ -6,6 +6,19 @@ import psrcelmerpy
 
 
 def get_parcels_for_city(parcels, city_name):
+    """Filter parcels to only include those within a specific city boundary.
+    
+    Args:
+        parcels (pd.DataFrame): DataFrame containing parcel data with x/y coordinates.
+        city_name (str): Name of the city to filter by.
+        
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame containing only parcels within the specified city.
+        
+    Note:
+        Requires psrcelmerpy package for accessing city boundary data.
+        Uses EPSG:2285 coordinate reference system (Washington State Plane South).
+    """
     eg_conn = psrcelmerpy.ElmerGeoConn()
     cities = eg_conn.read_geolayer("cities")
     cities = cities.to_crs(2285)

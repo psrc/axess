@@ -1,4 +1,3 @@
-from turtle import pd
 import pandas as pd
 import narwhals as nw
 import polars as pl
@@ -10,6 +9,7 @@ from multiprocessing import Pool, freeze_support
 import numpy as np
 from dataclasses import dataclass
 import polars as pl
+from functools import wraps
 
 # class dataset(NamedTuple):
 #     """a docstring"""
@@ -22,7 +22,19 @@ import polars as pl
 
 @dataclass(frozen=True)
 class registered_dataset:
-    """a docstring"""
+    """Data container for registered spatial datasets.
+    
+    This dataclass holds a spatial dataset along with metadata about
+    the column names for ID, x-coordinate, y-coordinate, and optional
+    additional columns.
+    
+    Attributes:
+        df (nw.DataFrame | pl.DataFrame): The spatial dataset.
+        id_col (str): Name of the column containing unique identifiers.
+        x_col (str): Name of the column containing x-coordinates.
+        y_col (str): Name of the column containing y-coordinates.
+        cols (list[str] | None): Optional list of additional column names.
+    """
 
     df: nw.DataFrame | pl.DataFrame
     id_col: str
@@ -31,8 +43,24 @@ class registered_dataset:
     cols: list[str] | None = None
 
 def timer_func(func):
-    # This function shows the execution time of
-    # the function object passed
+    """Decorator that measures and prints the execution time of a function.
+    
+    This decorator wraps a function to measure and print its execution time
+    in seconds using time.perf_counter() for high-resolution timing.
+    
+    Args:
+        func (callable): The function to be timed.
+        
+    Returns:
+        callable: The wrapped function that prints execution time.
+        
+    Example:
+        @timer_func
+        def my_function():
+            time.sleep(1)
+        # When called, prints: Function 'my_function' executed in 1.0000s
+    """
+    @wraps(func)
     def wrap_func(*args, **kwargs):
         t1 = time.perf_counter()
         result = func(*args, **kwargs)
@@ -44,9 +72,32 @@ def timer_func(func):
 
 
 class Network:
+    """Network analysis class for spatial accessibility calculations.
+    
+    This class provides functionality for network-based spatial analysis,
+    including node assignment and aggregation calculations within specified
+    distances along network paths.
+    """
+    
     def __init__(
         self, node_id, node_x, node_y, edge_from, edge_to, edge_weights, twoway=True
     ):
+        """Initialize a Network instance with nodes and edges.
+        
+        Args:
+            node_id: Array-like containing node identifiers.
+            node_x: Array-like containing x-coordinates of nodes.
+            node_y: Array-like containing y-coordinates of nodes.
+            edge_from: Array-like containing origin node IDs for edges.
+            edge_to: Array-like containing destination node IDs for edges.
+            edge_weights: List of array-like containing edge weight values.
+            twoway (bool, optional): If True, creates directed graph. If False,
+                creates undirected graph. Defaults to True.
+                
+        Note:
+            All array-like inputs are converted to narwhals DataFrames internally
+            for consistent handling across different DataFrame backends.
+        """
         node_id = nw.from_native(node_id, allow_series=True).to_frame()
         node_x = nw.from_native(node_x, allow_series=True).to_frame()
         node_y = nw.from_native(node_y, allow_series=True).to_frame()
@@ -83,11 +134,29 @@ class Network:
         self.registered_data = {}
 
     def __repr__(self):
+        """Return string representation of the Network instance.
+        
+        Returns:
+            str: String representation showing nodes and edges information.
+        """
         return f"Network(nodes={self.nodes}, edges={self.edges})"
 
     def assign_nodes(self, df, x_col, y_col):
-        """Find the nearest points in gdB for each point in gdA using cKDTree.
-        Returns a Polars DataFrame with distances and nearest points."""
+        """Find the nearest network nodes for each point in the dataset using cKDTree.
+        
+        Uses scipy's cKDTree for efficient nearest neighbor search to associate
+        each point in the input dataset with the closest network node.
+        
+        Args:
+            df: DataFrame containing point data to assign to network nodes.
+            x_col (str): Name of the column containing x-coordinates.
+            y_col (str): Name of the column containing y-coordinates.
+            
+        Returns:
+            DataFrame: Input dataframe with added 'node_id' and 'distance' columns.
+            The 'node_id' column contains the ID of the nearest network node,
+            and 'distance' contains the Euclidean distance to that node.
+        """
 
         # Extract coordinates as NumPy arrays
         points1 = df.select([x_col, y_col]).to_numpy()
@@ -109,19 +178,56 @@ class Network:
         return df
 
     def register_dataset(self, name, df, id_col, x_col, y_col, cols=None):
-        """Add data to the registered_data dictionary."""
+        """Register a spatial dataset for network analysis.
+        
+        Adds a spatial dataset to the network instance, automatically assigning
+        each point to its nearest network node. The dataset becomes available
+        for aggregation operations.
+        
+        Args:
+            name (str): Unique identifier for the dataset.
+            df: Input dataframe containing spatial point data.
+            id_col (str): Name of the column containing unique point identifiers.
+            x_col (str): Name of the column containing x-coordinates.
+            y_col (str): Name of the column containing y-coordinates.
+            cols (list[str], optional): List of additional column names of interest.
+                Defaults to None.
+                
+        Note:
+            The input dataframe is automatically converted to a narwhals DataFrame
+            for consistent handling across different DataFrame backends.
+        """
         df = nw.from_native(df)
         df = self.assign_nodes(df, x_col, y_col)
 
         self.registered_data[name] = registered_dataset(df, id_col, x_col, y_col, cols)
 
     def unregister_dataset(self, name):
-        """Remove data from the registered_data dictionary."""
+        """Remove a registered dataset from the network instance.
+        
+        Args:
+            name (str): Name of the dataset to remove.
+            
+        Note:
+            If the dataset name is not found, this method does nothing
+            (no error is raised).
+        """
         if name in self.registered_data:
             del self.registered_data[name]
 
     def _create_aggregation_dict(self, columns, agg_func):
-        """Create a dictionary for aggregation."""
+        """Create a dictionary mapping columns to their aggregation functions.
+        
+        Args:
+            columns (list[str]): List of column names to aggregate.
+            agg_func (str): Aggregation function name ("sum" or "mean").
+            
+        Returns:
+            dict: Dictionary mapping each column to its polars aggregation expression.
+            
+        Raises:
+            ValueError: If agg_func is not "sum" or "mean" (implicit via match statement).
+        """
         match agg_func:
             case "sum":
                 return {col: pl.col(col).sum() for col in columns}
@@ -129,7 +235,27 @@ class Network:
                 return {col: pl.col(col).mean() for col in columns}
 
     def _aggregate_run(self, name, columns, distance, arr, agg_func="sum"):
-        """Aggregate the data in set_data[name] using agg_func."""
+        """Core aggregation logic for network-based spatial analysis.
+        
+        This method performs the actual network analysis by:
+        1. Finding all nodes reachable within the specified distance
+        2. Joining reachable nodes with the registered dataset
+        3. Aggregating the specified columns using the given function
+        
+        Args:
+            name (str): Name of the registered dataset to use.
+            columns (list[str]): Column names to aggregate.
+            distance (float): Maximum network distance for reachability.
+            arr: DataFrame containing node_id values to process.
+            agg_func (str, optional): Aggregation function ("sum" or "mean").
+                Defaults to "sum".
+                
+        Returns:
+            pl.DataFrame: Aggregated results with original ID column and aggregated values.
+            
+        Raises:
+            ValueError: If the dataset name is not found in registered_data.
+        """
         agg_dict = self._create_aggregation_dict(columns, agg_func)
 
         if name not in self.registered_data:
@@ -181,6 +307,33 @@ class Network:
 
     @timer_func
     def aggregate(self, name, columns, distance, num_processes=1, agg_func="sum"):
+        """Aggregate data within network distance using single or multi-processing.
+        
+        This method performs network-based aggregation by finding all nodes reachable
+        within the specified network distance from each node, then aggregating the
+        specified columns using the given aggregation function.
+        
+        Args:
+            name (str): Name of the registered dataset to aggregate.
+            columns (list[str]): List of column names to aggregate.
+            distance (float): Maximum network distance for aggregation in the same
+                units as edge weights.
+            num_processes (int, optional): Number of processes for parallel execution.
+                If 1, runs in single-process mode. Defaults to 1.
+            agg_func (str, optional): Aggregation function to use. Options are
+                "sum" or "mean". Defaults to "sum".
+                
+        Returns:
+            pl.DataFrame: Aggregated data sorted by the dataset's ID column.
+            
+        Raises:
+            ValueError: If the named dataset is not found in registered_data.
+            
+        Note:
+            Multi-processing splits work by unique node_id values. For optimal
+            performance, ensure the number of unique nodes is much larger than
+            num_processes.
+        """
         start_time = time.perf_counter()
         registered_dataset = self.registered_data[name]
         if num_processes == 1:
