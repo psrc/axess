@@ -49,8 +49,8 @@ if __name__ == "__main__":
     )
 
     # Set city_name to None to run all parcels, but this takes a lot of RAM.
-    city_name = 'Shorline'
-    num_processes = 1
+    city_name = 'Shoreline'
+    num_processes = 2
 
     # pandas
     edges = pd.read_csv(network_path / "all_streets_links.csv")
@@ -64,8 +64,8 @@ if __name__ == "__main__":
     if city_name:
         parcels = get_parcels_for_city(parcels, city_name)
 
-    # create an instance of axess.network
-    parcels = parcels.head(400000)
+    #create an instance of axess.network
+    #parcels = parcels.head(100000)
     pandas_test = Network(
         node_id=nodes["node_id"],
         node_x=nodes["x"],
@@ -93,11 +93,34 @@ if __name__ == "__main__":
         "parcels_mp",
         columns=agg_columns,
         distance=2640,
-        num_processes=2,
+        num_processes=num_processes,
         agg_func="sum",
     )
-    
+
+    # Polars test
+    nodes = nodes.to_polars()
+    edges = edges.to_polars()
+    polars_test = Network(
+        node_id=nodes["node_id"],
+        node_x=nodes["x"],
+        node_y=nodes["y"],
+        edge_from=edges["from_node_id"],
+        edge_to=edges["to_node_id"],
+        edge_weights=[edges["weight"]],
+        twoway=False,
+    )
+
+    polars_test.register_dataset("parcels", parcels, "parcelid", "xcoord_p", "ycoord_p")
+    df_polars = polars_test.aggregate(
+        "parcels",
+        columns=agg_columns,
+        distance=2640,
+        num_processes=1,
+        agg_func="sum",
+    )
+
     assert len(df) == len(parcels), "Aggregated DataFrame length does not match parcels length."
     assert df.equals(df_mp), "DataFrames from single and multi-process do not match."
+    assert df.equals(df_polars), "DataFrames from pandas and polars do not match."
     # df.write_csv(r'T:\60day-TEMP\Stefan\test_two.csv')
     print("All tests passed!")

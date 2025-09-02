@@ -1,4 +1,4 @@
-from turtle import pd
+#from turtle import pd
 import pandas as pd
 import narwhals as nw
 import polars as pl
@@ -147,18 +147,18 @@ class Network:
             data.extend(rows)
 
         # convert results to DataFrame
-        reachble_nodes = pl.DataFrame(
+        reachable_nodes = pl.DataFrame(
             data, schema=["node_id", "target_node_id", "distance"]
         )
 
         # only keep the target nodes that are in the registered_dataset.df
-        reachble_nodes = reachble_nodes.filter(
+        reachable_nodes = reachable_nodes.filter(
             pl.col("target_node_id").is_in(registered_dataset.df["node_id"])
         )
 
         # get the registered_dataset.df and aggregate by node_id because multiple points 
         # of data could be associated with the same node. Need to aggregate their 
-        # attributes of interest before joining to reachble_nodes
+        # attributes of interest before joining to reachable_nodes
 
         data_to_aggregate = pl.DataFrame(
             registered_dataset.df.select([registered_dataset.id_col, "node_id"] + columns)
@@ -166,7 +166,7 @@ class Network:
         aggregated_to_nodes = data_to_aggregate.group_by("node_id").agg(**agg_dict)
 
         # join aggregated data to reachable_nodes
-        reachble_nodes = reachble_nodes.join(
+        reachable_nodes = reachable_nodes.join(
             aggregated_to_nodes,
             left_on="target_node_id",
             right_on="node_id",
@@ -174,9 +174,9 @@ class Network:
         )
 
         # aggregate attributes by node_id. performs aggregation of data for all reachable nodes.
-        reachble_nodes = reachble_nodes.group_by("node_id").agg(**agg_dict)
+        reachable_nodes = reachable_nodes.group_by("node_id").agg(**agg_dict)
         return data_to_aggregate.select([registered_dataset.id_col, "node_id"]).join(
-            reachble_nodes, on="node_id", how="inner"
+            reachable_nodes, on="node_id", how="inner"
         )
 
     @timer_func
@@ -191,12 +191,12 @@ class Network:
         else:
             df = registered_dataset.df.to_pandas()
             df = pd.DataFrame(df["node_id"].unique(), columns=["node_id"])
-            df_chunked = np.array_split(df, num_processes)
+            df_split = np.array_split(df, num_processes)
 
             # need to go back to polars for aggregate function
-            df_chunked = [pl.from_pandas(df) for df in df_chunked]
+            df_split = [pl.from_pandas(df) for df in df_split]
 
-            args_list = [(name, columns, distance, df, agg_func) for df in df_chunked]
+            args_list = [(name, columns, distance, df, agg_func) for df in df_split]
 
             with Pool(processes=num_processes) as pool:
                 results = pool.starmap(self._aggregate_run, args_list)
