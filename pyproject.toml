@@ -1,0 +1,23 @@
+[project]
+name = "axess"
+version = "0.0.1"
+description = "network aggregation and analysis."
+authors = [
+    {name = "stefancoe", email = "coestefan@gmail.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas",
+    "networkx", 
+    "polars",
+    "narwhals",
+    "scipy",
+    "geopandas",
+    "pyarrow",
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
