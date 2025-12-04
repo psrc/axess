@@ -1,11 +1,28 @@
-import pandas as pd
+"""Test script for model station accessibility analysis.
+
+This script demonstrates network accessibility analysis using
+model station network data and parcel datasets.
+"""
+
 from pathlib import Path
-from axess.network import Network
+
 import geopandas as gpd
+import pandas as pd
 import psrcelmerpy
+
+from axess.network import Network
 
 
 def get_parcels_for_city(parcels, city_name):
+    """Filter parcels dataset to include only parcels within a specified city.
+    
+    Args:
+        parcels: DataFrame containing parcel data with coordinate columns
+        city_name: Name of the city to filter parcels by
+        
+    Returns:
+        GeoDataFrame containing parcels that intersect with the specified city boundaries
+    """
     eg_conn = psrcelmerpy.ElmerGeoConn()
     cities = eg_conn.read_geolayer("cities")
     cities = cities.to_crs(2285)
@@ -21,7 +38,7 @@ def get_parcels_for_city(parcels, city_name):
 
 
 if __name__ == "__main__":
-    user_name = 'scoe'
+    user_name = "scoe"
     agg_columns = [
         "hh_p",
         "stugrd_p",
@@ -54,7 +71,8 @@ if __name__ == "__main__":
     distance = 15840
 
     # pandas
-    edges = pd.read_csv(network_path / "all_streets_links.csv")
+    #edges = pd.read_csv(network_path / "all_streets_links.csv")
+    edges = gpd.read_file(network_path / "final_network.shp")
     edges["weight"] = edges[
         "Shape_Length"
     ]  # Assuming 'Shape_Length' is the weight column
@@ -71,15 +89,15 @@ if __name__ == "__main__":
         node_id=nodes["node_id"],
         node_x=nodes["x"],
         node_y=nodes["y"],
-        edge_from=edges["from_node_id"],
-        edge_to=edges["to_node_id"],
+        edge_from=edges["i_node"],
+        edge_to=edges["j_node"],
         edge_weights=[edges["weight"]],
-        twoway=False,
+        twoway=True,
     )
 
     # associate parcels with axess.network instance using set.
     # TO Do: should we change the name of 'set' to something more desc?
-    pandas_test.register_dataset("parcels", parcels, "parcelid", "xcoord_p", "ycoord_p")
+    pandas_test.register_dataset("stops", parcels, "parcelid", "xcoord_p", "ycoord_p")
     # df = pandas_test.aggregate(
     #     "parcels",
     #     columns=agg_columns,

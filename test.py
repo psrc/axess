@@ -1,11 +1,29 @@
-import pandas as pd
+"""Test script for network accessibility analysis.
+
+This script demonstrates usage of the axess package for performing
+accessibility analysis on parcel data using transportation networks.
+"""
+
 from pathlib import Path
-from axess.network import Network
+
 import geopandas as gpd
+import pandas as pd
+import polars as pl
 import psrcelmerpy
+
+from axess.network import Network
 
 
 def get_parcels_for_city(parcels, city_name):
+    """Filter parcels dataset to include only parcels within a specified city.
+    
+    Args:
+        parcels: DataFrame containing parcel data with coordinate columns
+        city_name: Name of the city to filter parcels by
+        
+    Returns:
+        GeoDataFrame containing parcels that intersect with the specified city boundaries
+    """
     eg_conn = psrcelmerpy.ElmerGeoConn()
     cities = eg_conn.read_geolayer("cities")
     cities = cities.to_crs(2285)
@@ -21,7 +39,7 @@ def get_parcels_for_city(parcels, city_name):
 
 
 if __name__ == "__main__":
-    user_name = 'scoe'
+    user_name = "scoe"
     agg_columns = [
         "hh_p",
         "stugrd_p",
@@ -39,17 +57,17 @@ if __name__ == "__main__":
         "empret_p",
         "parkdy_p",
         "parkhr_p",
-        "nparks"
+        "nparks",
     ]
     network_path = Path(
-        f"C:/Users/{user_name}/Puget Sound Regional Council/GIS - Sharing/Users/Stefan/axess_data/network"
+        f"C:/Users/{user_name}/PSRC/GIS - Sharing/Users/Stefan/axess_data/network"
     )
     parcels_path = Path(
-        f"C:/Users/{user_name}/Puget Sound Regional Council/GIS - Sharing/Users/Stefan/axess_data/parcels/parcels_urbansim.txt"
+        f"C:/Users/{user_name}/PSRC/GIS - Sharing/Users/Stefan/axess_data/parcels/parcels_urbansim.txt"
     )
 
     # Set city_name to None to run all parcels, but this takes a lot of RAM.
-    city_name = 'Shoreline'
+    city_name = "Shoreline"
     num_processes = 2
 
     # pandas
@@ -59,13 +77,13 @@ if __name__ == "__main__":
     ]  # Assuming 'Shape_Length' is the weight column
     nodes = pd.read_csv(network_path / "all_streets_nodes.csv")
 
-    parcels = pd.read_csv(parcels_path, sep = ' ')
+    parcels = pd.read_csv(parcels_path, sep=" ")
 
     if city_name:
         parcels = get_parcels_for_city(parcels, city_name)
 
-    #create an instance of axess.network
-    #parcels = parcels.head(100000)
+    # create an instance of axess.network
+    # parcels = parcels.head(100000)
     pandas_test = Network(
         node_id=nodes["node_id"],
         node_x=nodes["x"],
@@ -88,7 +106,9 @@ if __name__ == "__main__":
     )
 
     # pandas MP test
-    pandas_test.register_dataset("parcels_mp", parcels, "parcelid", "xcoord_p", "ycoord_p")
+    pandas_test.register_dataset(
+        "parcels_mp", parcels, "parcelid", "xcoord_p", "ycoord_p"
+    )
     df_mp = pandas_test.aggregate(
         "parcels_mp",
         columns=agg_columns,
@@ -98,8 +118,9 @@ if __name__ == "__main__":
     )
 
     # Polars test
-    nodes = nodes.to_polars()
-    edges = edges.to_polars()
+    edges = pl.from_pandas(edges)
+    #edges = edges.to_polars()
+    nodes = pl.from_pandas(nodes)
     polars_test = Network(
         node_id=nodes["node_id"],
         node_x=nodes["x"],
@@ -119,7 +140,9 @@ if __name__ == "__main__":
         agg_func="sum",
     )
 
-    assert len(df) == len(parcels), "Aggregated DataFrame length does not match parcels length."
+    assert len(df) == len(parcels), (
+        "Aggregated DataFrame length does not match parcels length."
+    )
     assert df.equals(df_mp), "DataFrames from single and multi-process do not match."
     assert df.equals(df_polars), "DataFrames from pandas and polars do not match."
     # df.write_csv(r'T:\60day-TEMP\Stefan\test_two.csv')
