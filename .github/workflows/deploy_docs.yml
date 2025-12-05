@@ -53,8 +53,10 @@ jobs:
           else
             pip install sphinx
           fi
-          # Install the project itself for autodoc support
-          pip install -e . || true
+          # Install the project itself for autodoc support if pyproject.toml or setup.py exists
+          if [ -f pyproject.toml ] || [ -f setup.py ]; then
+            pip install -e .
+          fi
 
       # Build the Sphinx documentation
       - name: Build Sphinx documentation
