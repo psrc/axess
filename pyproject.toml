@@ -10,12 +10,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pandas",
-    "networkx", 
+    "networkx",
     "polars",
     "narwhals",
     "scipy",
     "geopandas",
     "pyarrow",
+    "sphinx>=9.0.4",
 ]
 
 [build-system]
