@@ -1,5 +1,5 @@
 .. axess documentation master file, created by
-   sphinx-quickstart on Thu Dec  4 16:38:41 2025.
+   sphinx-quickstart on Fri Dec  5 15:55:17 2025.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
@@ -14,6 +14,4 @@ documentation for details.
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
-
-   modules
 

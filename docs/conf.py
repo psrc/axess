@@ -5,9 +5,7 @@
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
-import sys
-import os
-sys.path.insert(0, os.path.abspath('..'))
+
 project = 'axess'
 copyright = '2025, PSRC'
 author = 'PSRC'
@@ -19,7 +17,7 @@ release = '0.0.1'
 extensions = ['sphinx.ext.autodoc']
 
 templates_path = ['_templates']
-exclude_patterns = []
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
 
 
