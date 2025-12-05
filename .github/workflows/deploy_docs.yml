@@ -1,41 +1,72 @@
-# This is a basic workflow to help you get started with Actions
-
+# Workflow to build Sphinx documentation and deploy to GitHub Pages
 name: Deploy Sphinx documentation to Pages
 
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
+  # Trigger on push to main branch
   push:
     branches: [ "main" ]
+  # Trigger on pull requests targeting main
   pull_request:
     branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
+  # Allow manual trigger from Actions tab
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+# Permissions required for GitHub Pages deployment
+permissions:
+  pages: write
+  id-token: write
+
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  build-and-deploy:
     runs-on: ubuntu-latest
+    # Use existing github-pages environment and expose deployment URL
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    permissions:
-      pages: write
-      id-token: write
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
-      - name: Upload artifact
+      # Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Set up Python 3.11
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      # Cache pip dependencies to speed up builds
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('docs/requirements.txt', 'requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # Upgrade pip, setuptools, and wheel, then install documentation dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          if [ -f docs/requirements.txt ]; then
+            pip install -r docs/requirements.txt
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install sphinx
+          fi
+
+      # Build Sphinx HTML documentation
+      - name: Build Sphinx documentation
+        run: sphinx-build -b html docs docs/build/html
+
+      # Upload the built documentation as a Pages artifact
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Point this to the directory where Sphinx outputs the HTML files (e.g., docs/_build/html)
-          path: 'docs/build/html' 
+          path: docs/build/html
 
+      # Deploy to GitHub Pages
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
