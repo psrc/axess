@@ -56,6 +56,11 @@ jobs:
             pip install sphinx
           fi
 
+      # Install the package in development mode so Sphinx can import modules for autodoc
+      - name: Install package
+        run: |
+          pip install -e .
+
       # Build Sphinx HTML documentation
       - name: Build Sphinx documentation
         run: sphinx-build -b html docs docs/build/html
