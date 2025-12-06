@@ -29,11 +29,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Set up Python 3.11
+      # Set up Python 3.12
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       # Cache pip dependencies to speed up builds
       - name: Cache pip dependencies
