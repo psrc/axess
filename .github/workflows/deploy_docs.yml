@@ -63,7 +63,13 @@ jobs:
 
       # Build Sphinx HTML documentation
       - name: Build Sphinx documentation
-        run: sphinx-build -b html docs docs/build/html
+        run: sphinx-build -b html docs docs/_build/html
+
+      - name: Verify built documentation
+        run: |
+          echo "Built docs listing:"
+          ls -al docs/_build || true
+          ls -al docs/_build/html || true
 
       # Upload the built documentation as a Pages artifact
       - name: Upload Pages artifact
