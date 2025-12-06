@@ -29,11 +29,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Set up Python 3.11
+      # Set up Python 3.12
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       # Cache pip dependencies to speed up builds
       - name: Cache pip dependencies
@@ -55,6 +55,11 @@ jobs:
           else
             pip install sphinx
           fi
+
+      # Install the package in development mode so Sphinx can import modules for autodoc
+      - name: Install package
+        run: |
+          pip install -e .
 
       # Build Sphinx HTML documentation
       - name: Build Sphinx documentation
