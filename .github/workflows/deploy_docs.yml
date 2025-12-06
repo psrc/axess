@@ -61,9 +61,20 @@ jobs:
         run: |
           pip install -e .
 
-      # Build Sphinx HTML documentation
+      # Build Sphinx HTML documentation (write to docs/_build/html to match artifact path)
       - name: Build Sphinx documentation
-        run: sphinx-build -b html docs docs/build/html
+        run: |
+          sphinx-build -b html docs docs/_build/html
+
+      # Verify the build output exists and show debug listing
+      - name: Verify docs output
+        run: |
+          echo "docs dir listing:"
+          ls -la docs || true
+          echo "_build dir listing:"
+          ls -la docs/_build || true
+          echo "html dir listing:"
+          ls -la docs/_build/html || (echo "No docs/_build/html — build failed"; exit 1)
 
       # Upload the built documentation as a Pages artifact
       - name: Upload Pages artifact
