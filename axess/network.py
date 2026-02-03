@@ -8,7 +8,6 @@ travelsheds and aggregating data within specified travel distances.
 import time
 from dataclasses import dataclass
 from multiprocessing import Pool, freeze_support
-from typing import NamedTuple
 
 import geopandas as gpd
 import narwhals as nw
@@ -18,16 +17,16 @@ import pandas as pd
 import polars as pl
 from scipy.spatial import cKDTree
 from shapely import concave_hull
-from shapely.geometry import MultiPoint, Point, Polygon
+from shapely.geometry import MultiPoint
 
 
 @dataclass(frozen=True)
 class RegisteredDataset:
     """A frozen dataclass for storing registered dataset information.
-    
+
     This class holds metadata about a dataset that has been registered with
     a Network instance, including the DataFrame and column information.
-    
+
     Attributes:
         df: The DataFrame containing the dataset
         id_col: Name of the column containing unique identifiers
@@ -42,18 +41,20 @@ class RegisteredDataset:
     y_col: str
     cols: list[str] | None = None
 
+
 def timer_func(func):
     """Decorator function to time execution of wrapped functions.
-    
+
     This decorator measures and prints the execution time of the decorated
     function using high-precision performance counters.
-    
+
     Args:
         func: The function to be timed
-        
+
     Returns:
         The wrapper function that adds timing functionality
     """
+
     def wrap_func(*args, **kwargs):
         t1 = time.perf_counter()
         result = func(*args, **kwargs)
@@ -66,18 +67,17 @@ def timer_func(func):
 
 class Network:
     """A network analysis class for accessibility calculations.
-    
+
     This class provides functionality for network-based accessibility analysis,
     including finding nearest network nodes, aggregating data within travel
     distances, and generating travelsheds.
     """
-    
+
     def __init__(
-        self, node_id, node_x, node_y, edge_from, edge_to, edge_weights, 
-        twoway=True
+        self, node_id, node_x, node_y, edge_from, edge_to, edge_weights, twoway=True
     ):
         """Initialize a Network instance.
-        
+
         Args:
             node_id: Series or array-like containing unique node identifiers
             node_x: Series or array-like containing node x coordinates
@@ -114,17 +114,19 @@ class Network:
             self.graph = nx.from_pandas_edgelist(
                 self.edges, "from", "to", self.weight_columns, self._graph_instance
             )
+            self.nodes = self.nodes.filter(nw.col("node_id").is_in(self.graph.nodes))
         else:
             self._graph_instance = nx.Graph()
             self.graph = nx.from_pandas_edgelist(
                 self.edges, "from", "to", self.weight_columns, self._graph_instance
             )
+            self.nodes = self.nodes.filter(nw.col("node_id").is_in(self.graph.nodes))
 
         self.registered_data = {}
 
     def __repr__(self):
         """Return string representation of the Network object.
-        
+
         Returns:
             A string representation showing nodes and edges information
         """
@@ -132,15 +134,15 @@ class Network:
 
     def assign_nodes(self, df, x_col, y_col):
         """Assign nearest network nodes to points in a DataFrame.
-        
+
         Uses spatial indexing with cKDTree to efficiently find the nearest
         network node for each point in the input DataFrame.
-        
+
         Args:
             df: DataFrame containing point data
             x_col: Name of column containing x coordinates
             y_col: Name of column containing y coordinates
-            
+
         Returns:
             DataFrame with added 'node_id' and 'distance' columns containing
             the nearest node ID and distance to that node for each point
@@ -167,10 +169,10 @@ class Network:
 
     def register_dataset(self, name, df, id_col, x_col, y_col, cols=None):
         """Register a dataset with the network for analysis.
-        
+
         Registers a dataset by assigning nearest network nodes to each point
         and storing the dataset metadata for later use in accessibility calculations.
-        
+
         Args:
             name: Unique name identifier for the dataset
             df: DataFrame containing the dataset
@@ -179,19 +181,19 @@ class Network:
             y_col: Name of column containing y coordinates
             cols: Optional list of additional columns to include in analysis
         """
+        if df is None or len(df) == 0:
+            raise ValueError("DataFrame is empty or None")
         df = nw.from_native(df)
         df = self.assign_nodes(df, x_col, y_col)
 
-        self.registered_data[name] = RegisteredDataset(
-            df, id_col, x_col, y_col, cols
-        )
+        self.registered_data[name] = RegisteredDataset(df, id_col, x_col, y_col, cols)
 
     def unregister_dataset(self, name):
         """Remove a registered dataset from the network.
-        
+
         Args:
             name: Name of the dataset to remove
-            
+
         Note:
             If the dataset name doesn't exist, this method silently does nothing
         """
@@ -200,11 +202,11 @@ class Network:
 
     def _create_aggregation_dict(self, columns, agg_func):
         """Create aggregation dictionary for Polars DataFrame operations.
-        
+
         Args:
             columns: List of column names to aggregate
             agg_func: Aggregation function name ('sum' or 'mean')
-            
+
         Returns:
             Dictionary mapping column names to Polars aggregation expressions
         """
@@ -213,26 +215,25 @@ class Network:
                 return {col: pl.col(col).sum() for col in columns}
             case "mean":
                 return {col: pl.col(col).mean() for col in columns}
-            
+
     def generate_travelshed(
-        self, name, distance=0, distance_column=None, allow_holes=False, 
-        ratio=1.0
+        self, name, distance=0, distance_column=None, allow_holes=False, ratio=1.0
     ):
         """Generate travelshed polygons for points in a registered dataset.
-        
+
         Creates concave hull polygons representing areas reachable within specified
         travel distances from each point in the dataset via the network.
-        
+
         Args:
             name: Name of the registered dataset
             distance: Fixed distance value (used if distance_column is None)
             distance_column: Column name containing distance values for each point
             allow_holes: Whether to allow holes in the generated polygons
             ratio: Concave hull ratio parameter (0.0 to 1.0, higher = more concave)
-            
+
         Returns:
             GeoDataFrame with travelshed polygons and corresponding point IDs
-            
+
         Raises:
             ValueError: If dataset name not found or neither distance nor distance_column specified
         """
@@ -243,9 +244,13 @@ class Network:
         registered_dataset = self.registered_data[name]
         data = []
         if distance_column:
-            arr = registered_dataset.df[[registered_dataset.id_col, "node_id", distance_column]].to_numpy()
+            arr = registered_dataset.df[
+                [registered_dataset.id_col, "node_id", distance_column]
+            ].to_numpy()
         else:
-            arr = registered_dataset.df[[registered_dataset.id_col, "node_id", distance_column]]
+            arr = registered_dataset.df[
+                [registered_dataset.id_col, "node_id", distance_column]
+            ]
             arr = arr.with_columns(pl.lit(distance).alias(distance_column))
             arr = arr.to_numpy()
         # for each node, find the shortest path to all other nodes within the distance
@@ -259,32 +264,31 @@ class Network:
                 nw.col("node_id").is_in(reachable_nodes[1:])
             )
             points = MultiPoint(reachable_nodes[["x", "y"]])
-            travelshed_poly = concave_hull(
-                points, allow_holes=allow_holes, ratio=ratio
+            travelshed_poly = concave_hull(points, allow_holes=allow_holes, ratio=ratio)
+            travelshed_rows.append(
+                {registered_dataset.id_col: point_id, "geometry": travelshed_poly}
             )
-            travelshed_rows.append({
-                registered_dataset.id_col: point_id, 
-                "geometry": travelshed_poly
-            })
         travelsheds = gpd.GeoDataFrame(travelshed_rows, geometry="geometry")
         return travelsheds
 
-    def _aggregate_run(self, name, columns, distance, arr, agg_func="sum"):
+    def _aggregate_run(
+        self, name, columns, distance, arr, agg_func="sum", decay_func=None
+    ):
         """Internal method to perform aggregation calculations.
-        
+
         Calculates accessibility by finding all reachable nodes within the specified
         distance and aggregating attribute values from the registered dataset.
-        
+
         Args:
             name: Name of the registered dataset
             columns: List of columns to aggregate
             distance: Maximum travel distance
             arr: Array of node IDs to process
             agg_func: Aggregation function ('sum' or 'mean')
-            
+            decay: Decay function to apply to distances (None, 'exponential' or 'linear')
         Returns:
             DataFrame with aggregated values for each input node
-            
+
         Raises:
             ValueError: If dataset name not found
         """
@@ -314,9 +318,9 @@ class Network:
             pl.col("target_node_id").is_in(registered_dataset.df["node_id"])
         )
 
-        # get the registered_dataset.df and aggregate by node_id because 
-        # multiple points of data could be associated with the same node. 
-        # Need to aggregate their attributes of interest before joining 
+        # get the registered_dataset.df and aggregate by node_id because
+        # multiple points of data could be associated with the same node.
+        # Need to aggregate their attributes of interest before joining
         # to reachable_nodes
 
         data_to_aggregate = pl.DataFrame(
@@ -324,9 +328,7 @@ class Network:
                 [registered_dataset.id_col, "node_id"] + columns
             )
         )
-        aggregated_to_nodes = data_to_aggregate.group_by("node_id").agg(
-            **agg_dict
-        )
+        aggregated_to_nodes = data_to_aggregate.group_by("node_id").agg(**agg_dict)
 
         # join aggregated data to reachable_nodes
         reachable_nodes = reachable_nodes.join(
@@ -336,34 +338,64 @@ class Network:
             how="inner",
         )
 
-        # aggregate attributes by node_id. performs aggregation of data 
+        # aggregate attributes by node_id. performs aggregation of data
         # for all reachable nodes.
+        if decay_func:
+            reachable_nodes = self._apply_decay_function(
+                reachable_nodes, "distance", distance, decay_func, columns
+            )
+
         reachable_nodes = reachable_nodes.group_by("node_id").agg(**agg_dict)
-        return data_to_aggregate.select(
-            [registered_dataset.id_col, "node_id"]
-        ).join(reachable_nodes, on="node_id", how="inner")
+
+        return data_to_aggregate.select([registered_dataset.id_col, "node_id"]).join(
+            reachable_nodes, on="node_id", how="inner"
+        )
+
+    def _apply_decay_function(
+        self, df, distance_column, max_distance, decay_type, var_columns
+    ):
+        assert decay_type in ["exponential", "linear"], (
+            "decay_type must be 'exponential' or 'linear'"
+        )
+        if decay_type == "exponential":
+            df = df.with_columns(
+                np.exp(-1 * pl.col(distance_column) / (max_distance * 0.5)).alias(
+                    "decay_weight"
+                )
+            )
+            df = df.with_columns(
+                [pl.col(col) * df["decay_weight"] for col in var_columns]
+            )
+        elif decay_type == "linear":
+            df = df.with_columns(
+                (1 - pl.col(distance_column) / max_distance).alias("decay_weight")
+            )
+            df = df.with_columns(
+                [pl.col(col) * df["decay_weight"] for col in var_columns]
+            )
+        return df
 
     @timer_func
     def aggregate(
-        self, name, columns, distance, num_processes=1, agg_func="sum"
+        self, name, columns, distance, num_processes=1, agg_func="sum", decay_func=None
     ):
         """Aggregate data within travel distance of points in a registered dataset.
-        
+
         Calculates accessibility measures by aggregating specified columns from
         the registered dataset for all locations reachable within the given
         travel distance via the network.
-        
+
         Args:
             name: Name of the registered dataset to aggregate
             columns: List of column names to aggregate
             distance: Maximum travel distance for aggregation
             num_processes: Number of processes for parallel execution (default: 1)
             agg_func: Aggregation function - 'sum' or 'mean' (default: 'sum')
-            
+            decay_func: Decay function to apply - 'exponential' or 'linear' (default: None)
         Returns:
             DataFrame with aggregated values for each point in the dataset,
             sorted by the dataset's ID column
-            
+
         Note:
             When num_processes > 1, the method uses multiprocessing for
             improved performance on large datasets
@@ -372,7 +404,7 @@ class Network:
         registered_dataset = self.registered_data[name]
         if num_processes == 1:
             arr = registered_dataset.df.select([registered_dataset.id_col, "node_id"])
-            df = self._aggregate_run(name, columns, distance, arr, agg_func)
+            df = self._aggregate_run(name, columns, distance, arr, agg_func, decay_func)
             return df.sort(pl.col(registered_dataset.id_col))
 
         else:
@@ -383,7 +415,9 @@ class Network:
             # need to go back to polars for aggregate function
             df_split = [pl.from_pandas(df) for df in df_split]
 
-            args_list = [(name, columns, distance, df, agg_func) for df in df_split]
+            args_list = [
+                (name, columns, distance, df, agg_func, decay_func) for df in df_split
+            ]
 
             with Pool(processes=num_processes) as pool:
                 results = pool.starmap(self._aggregate_run, args_list)
