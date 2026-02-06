@@ -36,6 +36,7 @@ class RegisteredDataset:
     """
 
     df: nw.DataFrame | pl.DataFrame
+    df_type: type
     id_col: str
     x_col: str
     y_col: str
@@ -63,6 +64,58 @@ def timer_func(func):
         return result
 
     return wrap_func
+
+
+def dataframe_type_returner(func):
+    """Decorator that returns DataFrame in the same type as the Network's dataframe_type.
+
+    This decorator ensures that any DataFrame returned by the decorated function
+    is converted to match the dataframe_type set during Network initialization.
+
+    Args:
+        func: The function to be decorated (must be a method of Network class)
+
+    Returns:
+        The wrapper function that converts the result to the correct DataFrame type
+    """
+
+    def wrapper(self, *args, **kwargs):
+        result = func(self, *args, **kwargs)
+        dataframe_type = self.registered_data[args[0]].df_type
+        # If result is a DataFrame, convert it to match the Network's dataframe_type
+        if (
+            hasattr(result, "to_pandas")
+            or hasattr(result, "to_polars")
+            or hasattr(result, "__narwhals_namespace__")
+        ):
+            try:
+                native_result = nw.to_native(result)
+                # If the result type doesn't match the network's dataframe_type, convert it
+                if type(native_result) != dataframe_type:
+                    if "pandas" in str(dataframe_type):
+                        # Convert to pandas
+                        if hasattr(native_result, "to_pandas"):
+                            result = native_result.to_pandas()
+                    elif "polars" in str(dataframe_type):
+                        # Convert to polars
+                        if hasattr(native_result, "to_polars"):
+                            result = native_result.to_polars()
+                        else:
+                            # If it's already polars, return native
+                            result = native_result
+                    else:
+                        # Return the native result if no conversion needed
+                        result = native_result
+                else:
+                    # Types match, return native
+                    result = native_result
+                return result
+            except:
+                # If conversion fails, return the original result
+                return result
+        return result
+
+    return wrapper
 
 
 class Network:
@@ -183,10 +236,15 @@ class Network:
         """
         if df is None or len(df) == 0:
             raise ValueError("DataFrame is empty or None")
+        if isinstance(df, gpd.GeoDataFrame):
+            df = pd.DataFrame(df.drop(columns="geometry"))
+        df_type = type(df)
         df = nw.from_native(df)
         df = self.assign_nodes(df, x_col, y_col)
 
-        self.registered_data[name] = RegisteredDataset(df, id_col, x_col, y_col, cols)
+        self.registered_data[name] = RegisteredDataset(
+            df, df_type=df_type, id_col=id_col, x_col=x_col, y_col=y_col, cols=cols
+        )
 
     def unregister_dataset(self, name):
         """Remove a registered dataset from the network.
@@ -199,6 +257,22 @@ class Network:
         """
         if name in self.registered_data:
             del self.registered_data[name]
+
+    def get_registered_data(self, name: str) -> object:
+        """Retrieve a registered dataset by name.
+
+        Args:
+            name: Name of the registered dataset to retrieve
+
+        Returns:
+            The RegisteredDataset instance associated with the given name
+
+        Raises:
+            ValueError: If no dataset is registered under the given name
+        """
+        if name not in self.registered_data:
+            raise ValueError(f"Data set '{name}' not found.")
+        return self.registered_data[name]
 
     def _create_aggregation_dict(self, columns, agg_func):
         """Create aggregation dictionary for Polars DataFrame operations.
@@ -375,7 +449,8 @@ class Network:
             )
         return df
 
-    @timer_func
+    # @timer_func
+    @dataframe_type_returner
     def aggregate(
         self, name, columns, distance, num_processes=1, agg_func="sum", decay_func=None
     ):
@@ -405,7 +480,7 @@ class Network:
         if num_processes == 1:
             arr = registered_dataset.df.select([registered_dataset.id_col, "node_id"])
             df = self._aggregate_run(name, columns, distance, arr, agg_func, decay_func)
-            return df.sort(pl.col(registered_dataset.id_col))
+            return nw.from_native(df.sort(pl.col(registered_dataset.id_col)))
 
         else:
             df = registered_dataset.df.to_pandas()
@@ -428,7 +503,178 @@ class Network:
             end_time = time.perf_counter()
             elapsed_time = end_time - start_time
             print(f"Elapsed time: {elapsed_time:.4f} seconds")
-            return merged_df
+            return nw.from_native(merged_df)
+
+    def nearest_points_of_interest_old(
+        self,
+        from_dataset_name,
+        to_dataset_name,
+        search_distance,
+        num_points=1,
+        num_processes=1,
+    ):
+        # start_time = time.perf_counter()
+        from_registered_dataset = self.registered_data[from_dataset_name]
+        to_registered_dataset = self.registered_data[to_dataset_name]
+        if num_processes == 1:
+            from_arr = from_registered_dataset.df.select(
+                [from_registered_dataset.id_col, "node_id"]
+            )
+            data = []
+            from_arr = from_arr["node_id"].unique().to_numpy()
+
+            # for each from node, find the shortest path to all other nodes within the distance
+            for node_id in from_arr:
+                length = nx.single_source_dijkstra_path_length(
+                    self.graph, node_id, cutoff=search_distance, weight="weight"
+                )
+                rows = [(node_id, k, v) for k, v in length.items()]
+                data.extend(rows)
+
+        # Create DataFrame in the same backend as the registered datasets
+        reachable_nodes_native = pl.DataFrame(
+            data, schema=["node_id", "target_node_id", "distance"]
+        )
+
+        # Convert to the same backend as to_registered_dataset
+        # Check the underlying native type of the Narwhals DataFrame
+        try:
+            native_df = nw.to_native(to_registered_dataset.df)
+            if "pandas" in str(type(native_df)):
+                # Convert to pandas if to_registered_dataset is pandas
+                reachable_nodes = nw.from_native(reachable_nodes_native.to_pandas())
+            else:
+                # Keep as polars if to_registered_dataset is polars
+                reachable_nodes = nw.from_native(reachable_nodes_native)
+        except:
+            # Fallback - assume polars
+            reachable_nodes = nw.from_native(reachable_nodes_native)
+
+        reachable_nodes = reachable_nodes.filter(
+            nw.col("target_node_id").is_in(to_registered_dataset.df["node_id"])
+        )
+
+        reachable_nodes = reachable_nodes.join(
+            to_registered_dataset.df,
+            left_on="target_node_id",
+            right_on="node_id",
+            how="inner",
+        )
+
+        # reachable_to_data = to_registered_dataset.df.join(
+        #     reachable_nodes,
+        #     left_on="node_id",
+        #     right_on="target_node_id",
+        #     how="left",
+        # )
+        # only keep the target nodes that are in the to_registered_dataset.df
+
+        print("done")
+
+    @dataframe_type_returner
+    def nearest_points_of_interest(
+        self,
+        to_dataset_name,
+        search_distance,
+        from_dataset_name=None,
+        num_points=1,
+        num_processes=1,
+        include_ids=False,
+    ):
+        # start_time = time.perf_counter()
+        to_registered_dataset = self.registered_data[to_dataset_name]
+        if num_processes == 1:
+            if from_dataset_name:
+                from_registered_dataset = self.registered_data[from_dataset_name]
+                from_arr = from_registered_dataset.df.select(["node_id"])
+            else:
+                from_arr = self.nodes.select(["node_id"])
+            data = []
+            from_arr = from_arr["node_id"].unique().to_numpy()
+
+            # for each from node, find the shortest path to all other nodes within the distance
+            for node_id in from_arr:
+                length = nx.single_source_dijkstra_path_length(
+                    self.graph, node_id, cutoff=search_distance, weight="weight"
+                )
+                rows = [(node_id, k, v) for k, v in length.items()]
+                data.extend(rows)
+
+        # Create DataFrame in the same backend as the registered datasets
+        reachable_nodes = pl.DataFrame(
+            data, schema=["node_id", "target_node_id", "distance"]
+        )
+
+        reachable_nodes = nw.from_native(reachable_nodes)
+
+        reachable_nodes = reachable_nodes.filter(
+            nw.col("target_node_id").is_in(to_registered_dataset.df["node_id"])
+        )
+
+        # For each node_id, keep only the num_points closest points based on distance
+        reachable_nodes = (
+            reachable_nodes.sort(["node_id", "distance"])
+            .with_row_index("row_num")
+            .with_columns(
+                nw.col("row_num").rank(method="ordinal").over("node_id").alias("rank")
+            )
+            .filter(nw.col("rank") <= num_points)
+            .drop("row_num", "rank")
+        )
+
+        # Assert that no node_id has more than num_points destinations
+        # max_count = reachable_nodes.value_counts("node_id")
+        # assert max_count <= num_points, f"Found node_id with {max_count} destinations, expected max {num_points}"
+
+        if include_ids:
+            to_df = to_registered_dataset.df
+            if not to_df.implementation.is_polars():
+                to_df = nw.from_native(to_df).to_polars()
+                to_df = nw.from_native(to_df)
+
+            reachable_nodes = reachable_nodes.join(
+                to_df.select([to_registered_dataset.id_col, "node_id"]),
+                left_on="target_node_id",
+                right_on="node_id",
+                how="left",
+            )
+
+            # make sure there is only one row per node_id and to_registered_dataset.id_col
+            reachable_nodes = reachable_nodes.group_by(["node_id", to_registered_dataset.id_col]).agg(
+                nw.col("target_node_id").first(),
+                nw.col("distance").first()
+            )
+
+            if from_dataset_name:
+                from_df = from_registered_dataset.df
+                reachable_nodes = reachable_nodes.filter(
+                    nw.col("node_id").is_in(from_df["node_id"])
+                )
+                if not from_df.implementation.is_polars():
+                    from_df = nw.from_native(from_df).to_polars()
+                    from_df = nw.from_native(from_df)
+                reachable_nodes = reachable_nodes.join(
+                    from_df.select([from_registered_dataset.id_col, "node_id"]),
+                    left_on="node_id",
+                    right_on="node_id",
+                    how="left",
+                )
+                reachable_nodes = reachable_nodes.group_by(["node_id", from_registered_dataset.id_col, to_registered_dataset.id_col]).agg(
+                    nw.col("target_node_id").first(),
+                    nw.col("distance").first()
+                )
+
+        return reachable_nodes
+        # reachable_nodes = reachable_nodes.join(
+        #     df,
+        #     left_on="target_node_id",
+        #     right_on="node_id",
+        #     how="inner",
+        # )
+
+        # reachable_nodes = reachable_nodes.select(["node_id", "target_node_id", "distance", to_registered_dataset.id_col])
+
+        print("done")
 
 
 if __name__ == "__main__":
