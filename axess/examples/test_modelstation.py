@@ -58,27 +58,27 @@ if __name__ == "__main__":
         "parkhr_p",
         "nparks"
     ]
+    
     network_path = Path(
-        r"R:\e2projects_two\2023_base_year\all_streets\walk_network\output"
+        "R:/e2projects_two/Stefan/axess_data/network"
     )
     parcels_path = Path(
-        r"R:\e2projects_two\SoundCast\Inputs\rtp_2026_2050\landuse\2023\23_on_23_v3\parcels_urbansim.txt"
+        f"R:/e2projects_two/Stefan/axess_data/parcels/parcels_urbansim.txt"
     )
 
     # Set city_name to None to run all parcels, but this takes a lot of RAM.
     city_name = None
     num_processes = 20
-    distance = 15840
+    distance = 2640
 
     # pandas
-    #edges = pd.read_csv(network_path / "all_streets_links.csv")
-    edges = gpd.read_file(network_path / "final_network.shp")
+    edges = pd.read_csv(network_path / "all_streets_links.csv")
     edges["weight"] = edges[
         "Shape_Length"
     ]  # Assuming 'Shape_Length' is the weight column
     nodes = pd.read_csv(network_path / "all_streets_nodes.csv")
 
-    parcels = pd.read_csv(parcels_path, sep = ' ')
+    parcels = pd.read_csv(parcels_path, sep=" ")
 
     if city_name:
         parcels = get_parcels_for_city(parcels, city_name)
@@ -89,15 +89,15 @@ if __name__ == "__main__":
         node_id=nodes["node_id"],
         node_x=nodes["x"],
         node_y=nodes["y"],
-        edge_from=edges["i_node"],
-        edge_to=edges["j_node"],
+        edge_from=edges["from_node_id"],
+        edge_to=edges["to_node_id"],
         edge_weights=[edges["weight"]],
-        twoway=True,
+        twoway=False,
     )
 
     # associate parcels with axess.network instance using set.
     # TO Do: should we change the name of 'set' to something more desc?
-    pandas_test.register_dataset("stops", parcels, "parcelid", "xcoord_p", "ycoord_p")
+    pandas_test.register_dataset("parcels", parcels, "parcelid", "xcoord_p", "ycoord_p")
     # df = pandas_test.aggregate(
     #     "parcels",
     #     columns=agg_columns,

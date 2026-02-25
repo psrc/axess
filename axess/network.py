@@ -475,6 +475,7 @@ class Network:
             When num_processes > 1, the method uses multiprocessing for
             improved performance on large datasets
         """
+
         start_time = time.perf_counter()
         registered_dataset = self.registered_data[name]
         if num_processes == 1:
@@ -486,6 +487,7 @@ class Network:
             df = registered_dataset.df.to_pandas()
             df = pd.DataFrame(df["node_id"].unique(), columns=["node_id"])
             df_split = np.array_split(df, num_processes)
+            df_split = [pd.DataFrame(a, columns=df.columns) for a in df_split]
 
             # need to go back to polars for aggregate function
             df_split = [pl.from_pandas(df) for df in df_split]
@@ -505,72 +507,6 @@ class Network:
             print(f"Elapsed time: {elapsed_time:.4f} seconds")
             return nw.from_native(merged_df)
 
-    def nearest_points_of_interest_old(
-        self,
-        from_dataset_name,
-        to_dataset_name,
-        search_distance,
-        num_points=1,
-        num_processes=1,
-    ):
-        # start_time = time.perf_counter()
-        from_registered_dataset = self.registered_data[from_dataset_name]
-        to_registered_dataset = self.registered_data[to_dataset_name]
-        if num_processes == 1:
-            from_arr = from_registered_dataset.df.select(
-                [from_registered_dataset.id_col, "node_id"]
-            )
-            data = []
-            from_arr = from_arr["node_id"].unique().to_numpy()
-
-            # for each from node, find the shortest path to all other nodes within the distance
-            for node_id in from_arr:
-                length = nx.single_source_dijkstra_path_length(
-                    self.graph, node_id, cutoff=search_distance, weight="weight"
-                )
-                rows = [(node_id, k, v) for k, v in length.items()]
-                data.extend(rows)
-
-        # Create DataFrame in the same backend as the registered datasets
-        reachable_nodes_native = pl.DataFrame(
-            data, schema=["node_id", "target_node_id", "distance"]
-        )
-
-        # Convert to the same backend as to_registered_dataset
-        # Check the underlying native type of the Narwhals DataFrame
-        try:
-            native_df = nw.to_native(to_registered_dataset.df)
-            if "pandas" in str(type(native_df)):
-                # Convert to pandas if to_registered_dataset is pandas
-                reachable_nodes = nw.from_native(reachable_nodes_native.to_pandas())
-            else:
-                # Keep as polars if to_registered_dataset is polars
-                reachable_nodes = nw.from_native(reachable_nodes_native)
-        except:
-            # Fallback - assume polars
-            reachable_nodes = nw.from_native(reachable_nodes_native)
-
-        reachable_nodes = reachable_nodes.filter(
-            nw.col("target_node_id").is_in(to_registered_dataset.df["node_id"])
-        )
-
-        reachable_nodes = reachable_nodes.join(
-            to_registered_dataset.df,
-            left_on="target_node_id",
-            right_on="node_id",
-            how="inner",
-        )
-
-        # reachable_to_data = to_registered_dataset.df.join(
-        #     reachable_nodes,
-        #     left_on="node_id",
-        #     right_on="target_node_id",
-        #     how="left",
-        # )
-        # only keep the target nodes that are in the to_registered_dataset.df
-
-        print("done")
-
     @dataframe_type_returner
     def nearest_points_of_interest(
         self,
@@ -581,24 +517,154 @@ class Network:
         num_processes=1,
         include_ids=False,
     ):
+        start_time = time.perf_counter()
+
+        if from_dataset_name:
+            from_registered_dataset = self.registered_data[from_dataset_name]
+            from_arr = from_registered_dataset.df.select(["node_id"])
+
+        else:
+            from_arr = self.nodes.select(["node_id"])
+            from_registered_dataset = None
+
+        
+
+        if num_processes == 1:
+            
+            df = self._run_nearest_points_of_interest(
+                from_arr,
+                to_dataset_name,
+                search_distance,
+                from_registered_dataset,
+                num_points,
+                include_ids,
+            )
+            return df
+        
+        else:
+            df = from_arr.to_pandas()
+            df = pd.DataFrame(df["node_id"].unique(), columns=["node_id"])
+            df_split = np.array_split(df, num_processes)
+            df_split = [pd.DataFrame(a, columns=df.columns) for a in df_split]
+
+            # need to go back to polars for aggregate function
+            df_split = [pl.from_pandas(df) for df in df_split]
+
+            args_list = [
+                (df, to_dataset_name, search_distance, from_registered_dataset, num_points, include_ids) for df in df_split
+            ]
+
+            with Pool(processes=num_processes) as pool:
+                results = pool.starmap(self._run_nearest_points_of_interest, args_list)
+
+            merged_df = nw.concat(results)
+            #merged_df = merged_df.sort(pl.col(registered_dataset.id_col))
+
+            end_time = time.perf_counter()
+            elapsed_time = end_time - start_time
+            print(f"Elapsed time: {elapsed_time:.4f} seconds")
+            return merged_df
+            
+
+
+        #     return nw.from_native(df)
+
+        #     # for each from node, find the shortest path to all other nodes within the distance
+        #     for node_id in from_arr:
+        #         length = nx.single_source_dijkstra_path_length(
+        #             self.graph, node_id, cutoff=search_distance, weight="weight"
+        #         )
+        #         rows = [(node_id, k, v) for k, v in length.items()]
+        #         data.extend(rows)
+
+        # # Create DataFrame in the same backend as the registered datasets
+        # reachable_nodes = pl.DataFrame(
+        #     data, schema=["node_id", "target_node_id", "distance"]
+        # )
+
+        # reachable_nodes = nw.from_native(reachable_nodes)
+
+        # reachable_nodes = reachable_nodes.filter(
+        #     nw.col("target_node_id").is_in(to_registered_dataset.df["node_id"])
+        # )
+
+        # # For each node_id, keep only the num_points closest points based on distance
+        # reachable_nodes = (
+        #     reachable_nodes.sort(["node_id", "distance"])
+        #     .with_row_index("row_num")
+        #     .with_columns(
+        #         nw.col("row_num").rank(method="ordinal").over("node_id").alias("rank")
+        #     )
+        #     .filter(nw.col("rank") <= num_points)
+        #     .drop("row_num", "rank")
+        # )
+
+        # # Assert that no node_id has more than num_points destinations
+        # # max_count = reachable_nodes.value_counts("node_id")
+        # # assert max_count <= num_points, f"Found node_id with {max_count} destinations, expected max {num_points}"
+
+        # if include_ids:
+        #     to_df = to_registered_dataset.df
+        #     if not to_df.implementation.is_polars():
+        #         to_df = nw.from_native(to_df).to_polars()
+        #         to_df = nw.from_native(to_df)
+
+        #     reachable_nodes = reachable_nodes.join(
+        #         to_df.select([to_registered_dataset.id_col, "node_id"]),
+        #         left_on="target_node_id",
+        #         right_on="node_id",
+        #         how="left",
+        #     )
+
+        #     # make sure there is only one row per node_id and to_registered_dataset.id_col
+        #     reachable_nodes = reachable_nodes.group_by(
+        #         ["node_id", to_registered_dataset.id_col]
+        #     ).agg(nw.col("target_node_id").first(), nw.col("distance").first())
+
+        #     if from_dataset_name:
+        #         from_df = from_registered_dataset.df
+        #         reachable_nodes = reachable_nodes.filter(
+        #             nw.col("node_id").is_in(from_df["node_id"])
+        #         )
+        #         if not from_df.implementation.is_polars():
+        #             from_df = nw.from_native(from_df).to_polars()
+        #             from_df = nw.from_native(from_df)
+        #         reachable_nodes = reachable_nodes.join(
+        #             from_df.select([from_registered_dataset.id_col, "node_id"]),
+        #             left_on="node_id",
+        #             right_on="node_id",
+        #             how="left",
+        #         )
+        #         reachable_nodes = reachable_nodes.group_by(
+        #             [
+        #                 "node_id",
+        #                 from_registered_dataset.id_col,
+        #                 to_registered_dataset.id_col,
+        #             ]
+        #         ).agg(nw.col("target_node_id").first(), nw.col("distance").first())
+
+        # return reachable_nodes
+
+    def _run_nearest_points_of_interest(
+        self,
+        from_array,
+        to_dataset_name,
+        search_distance,
+        from_registered_dataset=None,
+        num_points=1,
+        include_ids=False,
+    ):
+
         # start_time = time.perf_counter()
         to_registered_dataset = self.registered_data[to_dataset_name]
-        if num_processes == 1:
-            if from_dataset_name:
-                from_registered_dataset = self.registered_data[from_dataset_name]
-                from_arr = from_registered_dataset.df.select(["node_id"])
-            else:
-                from_arr = self.nodes.select(["node_id"])
-            data = []
-            from_arr = from_arr["node_id"].unique().to_numpy()
-
-            # for each from node, find the shortest path to all other nodes within the distance
-            for node_id in from_arr:
-                length = nx.single_source_dijkstra_path_length(
-                    self.graph, node_id, cutoff=search_distance, weight="weight"
-                )
-                rows = [(node_id, k, v) for k, v in length.items()]
-                data.extend(rows)
+        data = []
+        from_array = from_array["node_id"].unique().to_numpy()
+        for node_id in from_array:
+            length = nx.single_source_dijkstra_path_length(
+                self.graph, node_id, cutoff=search_distance, weight="weight"
+            )
+            rows = [(node_id, k, v) for k, v in length.items()]
+            data.extend(rows)
 
         # Create DataFrame in the same backend as the registered datasets
         reachable_nodes = pl.DataFrame(
@@ -640,12 +706,11 @@ class Network:
             )
 
             # make sure there is only one row per node_id and to_registered_dataset.id_col
-            reachable_nodes = reachable_nodes.group_by(["node_id", to_registered_dataset.id_col]).agg(
-                nw.col("target_node_id").first(),
-                nw.col("distance").first()
-            )
+            reachable_nodes = reachable_nodes.group_by(
+                ["node_id", to_registered_dataset.id_col]
+            ).agg(nw.col("target_node_id").first(), nw.col("distance").first())
 
-            if from_dataset_name:
+            if from_registered_dataset:
                 from_df = from_registered_dataset.df
                 reachable_nodes = reachable_nodes.filter(
                     nw.col("node_id").is_in(from_df["node_id"])
@@ -659,20 +724,15 @@ class Network:
                     right_on="node_id",
                     how="left",
                 )
-                reachable_nodes = reachable_nodes.group_by(["node_id", from_registered_dataset.id_col, to_registered_dataset.id_col]).agg(
-                    nw.col("target_node_id").first(),
-                    nw.col("distance").first()
-                )
+                reachable_nodes = reachable_nodes.group_by(
+                    [
+                        "node_id",
+                        from_registered_dataset.id_col,
+                        to_registered_dataset.id_col,
+                    ]
+                ).agg(nw.col("target_node_id").first(), nw.col("distance").first())
 
         return reachable_nodes
-        # reachable_nodes = reachable_nodes.join(
-        #     df,
-        #     left_on="target_node_id",
-        #     right_on="node_id",
-        #     how="inner",
-        # )
-
-        # reachable_nodes = reachable_nodes.select(["node_id", "target_node_id", "distance", to_registered_dataset.id_col])
 
         print("done")
 

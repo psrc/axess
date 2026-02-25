@@ -103,6 +103,7 @@ if __name__ == "__main__":
         distance=2640,
         num_processes=1,
         agg_func="sum",
+        decay_func="exponential",
     )
 
     # pandas MP test
@@ -115,6 +116,7 @@ if __name__ == "__main__":
         distance=2640,
         num_processes=num_processes,
         agg_func="sum",
+        decay_func="exponential"
     )
 
     # Polars test
@@ -138,6 +140,7 @@ if __name__ == "__main__":
         distance=2640,
         num_processes=1,
         agg_func="sum",
+        decay_func="exponential"
     )
 
     assert len(df) == len(parcels), (
