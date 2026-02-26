@@ -273,21 +273,41 @@ class Network:
             raise ValueError(f"Data set '{name}' not found.")
         return self.registered_data[name]
 
-    def _create_aggregation_dict(self, columns, agg_func):
+    def _create_aggregation_dict(self, columns, agg_func=None):
         """Create aggregation dictionary for Polars DataFrame operations.
 
         Args:
-            columns: List of column names to aggregate
-            agg_func: Aggregation function name ('sum' or 'mean')
+            columns: List of column names to aggregate, or a dictionary mapping
+                column names to aggregation function names
+                (e.g. {"test": "sum", "value": "mean"})
+            agg_func: Aggregation function name ('sum' or 'mean'). Used when
+                columns is a list. Ignored when columns is a dict.
 
         Returns:
             Dictionary mapping column names to Polars aggregation expressions
         """
-        match agg_func:
-            case "sum":
-                return {col: pl.col(col).sum() for col in columns}
-            case "mean":
-                return {col: pl.col(col).mean() for col in columns}
+        agg_map = {
+            "sum": lambda c: pl.col(c).sum(),
+            "mean": lambda c: pl.col(c).mean(),
+        }
+
+        if isinstance(columns, dict):
+            result = {}
+            for col, func in columns.items():
+                if func not in agg_map:
+                    raise ValueError(
+                        f"Unsupported aggregation function '{func}'. "
+                        f"Supported: {list(agg_map.keys())}"
+                    )
+                result[col] = agg_map[func](col)
+            return result
+
+        if agg_func not in agg_map:
+            raise ValueError(
+                f"Unsupported aggregation function '{agg_func}'. "
+                f"Supported: {list(agg_map.keys())}"
+            )
+        return {col: agg_map[agg_func](col) for col in columns}
 
     def generate_travelshed(
         self, name, distance=0, distance_column=None, allow_holes=False, ratio=1.0
@@ -478,10 +498,13 @@ class Network:
         start_time = time.perf_counter()
         registered_dataset = self.registered_data[name]
         
-        if columns is None and columns_agg_dict is None:
-            raise ValueError("Either columns or columns_agg_dict must be provided.")
-        if columns_agg_dict is None:
+        if columns:
             columns_agg_dict = self._create_aggregation_dict(columns, agg_func)
+        elif columns_agg_dict:
+            columns_agg_dict = self._create_aggregation_dict(columns_agg_dict)
+        else:
+            raise ValueError("Either columns or columns_agg_dict must be provided.")
+
         if num_processes == 1:
             arr = registered_dataset.df.select([registered_dataset.id_col, "node_id"])
             df = self._aggregate_run(name, columns_agg_dict, distance, arr, agg_func, decay_func)
