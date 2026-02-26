@@ -16,6 +16,7 @@ dependencies = [
     "scipy",
     "geopandas",
     "pyarrow",
+    "loky",
     "sphinx>=9.0.4",
 ]
 

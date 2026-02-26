@@ -7,7 +7,6 @@ travelsheds and aggregating data within specified travel distances.
 
 import time
 from dataclasses import dataclass
-from multiprocessing import Pool, freeze_support
 
 import geopandas as gpd
 import narwhals as nw
@@ -346,7 +345,7 @@ class Network:
         return travelsheds
 
     def _aggregate_run(
-        self, name, columns, distance, arr, agg_func="sum", decay_func=None
+        self, name, agg_dict, distance, arr, agg_func="sum", decay_func=None
     ):
         """Internal method to perform aggregation calculations.
 
@@ -355,7 +354,7 @@ class Network:
 
         Args:
             name: Name of the registered dataset
-            columns: List of columns to aggregate
+            agg_dict: Dictionary specifying aggregation functions for each column
             distance: Maximum travel distance
             arr: Array of node IDs to process
             agg_func: Aggregation function ('sum' or 'mean')
@@ -366,7 +365,7 @@ class Network:
         Raises:
             ValueError: If dataset name not found
         """
-        agg_dict = self._create_aggregation_dict(columns, agg_func)
+        #agg_dict = self._create_aggregation_dict(columns, agg_func)
 
         if name not in self.registered_data:
             raise ValueError(f"Data set '{name}' not found.")
@@ -399,7 +398,7 @@ class Network:
 
         data_to_aggregate = pl.DataFrame(
             registered_dataset.df.select(
-                [registered_dataset.id_col, "node_id"] + columns
+                [registered_dataset.id_col, "node_id"] + list(agg_dict.keys())
             )
         )
         aggregated_to_nodes = data_to_aggregate.group_by("node_id").agg(**agg_dict)
@@ -416,7 +415,7 @@ class Network:
         # for all reachable nodes.
         if decay_func:
             reachable_nodes = self._apply_decay_function(
-                reachable_nodes, "distance", distance, decay_func, columns
+                reachable_nodes, "distance", distance, decay_func, list(agg_dict.keys())
             )
 
         reachable_nodes = reachable_nodes.group_by("node_id").agg(**agg_dict)
@@ -452,7 +451,7 @@ class Network:
     # @timer_func
     @dataframe_type_returner
     def aggregate(
-        self, name, columns, distance, num_processes=1, agg_func="sum", decay_func=None
+        self, name, distance, columns = None, columns_agg_dict = None, num_processes=1, agg_func="sum", decay_func=None
     ):
         """Aggregate data within travel distance of points in a registered dataset.
 
@@ -478,12 +477,19 @@ class Network:
 
         start_time = time.perf_counter()
         registered_dataset = self.registered_data[name]
+        
+        if columns is None and columns_agg_dict is None:
+            raise ValueError("Either columns or columns_agg_dict must be provided.")
+        if columns_agg_dict is None:
+            columns_agg_dict = self._create_aggregation_dict(columns, agg_func)
         if num_processes == 1:
             arr = registered_dataset.df.select([registered_dataset.id_col, "node_id"])
-            df = self._aggregate_run(name, columns, distance, arr, agg_func, decay_func)
+            df = self._aggregate_run(name, columns_agg_dict, distance, arr, agg_func, decay_func)
             return nw.from_native(df.sort(pl.col(registered_dataset.id_col)))
 
         else:
+            from loky import get_reusable_executor
+
             df = registered_dataset.df.to_pandas()
             df = pd.DataFrame(df["node_id"].unique(), columns=["node_id"])
             df_split = np.array_split(df, num_processes)
@@ -492,12 +498,14 @@ class Network:
             # need to go back to polars for aggregate function
             df_split = [pl.from_pandas(df) for df in df_split]
 
-            args_list = [
-                (name, columns, distance, df, agg_func, decay_func) for df in df_split
+            executor = get_reusable_executor(max_workers=num_processes)
+            futures = [
+                executor.submit(
+                    self._aggregate_run, name, columns_agg_dict, distance, df, agg_func, decay_func
+                )
+                for df in df_split
             ]
-
-            with Pool(processes=num_processes) as pool:
-                results = pool.starmap(self._aggregate_run, args_list)
+            results = [f.result() for f in futures]
 
             merged_df = pl.concat(results)
             merged_df = merged_df.sort(pl.col(registered_dataset.id_col))
@@ -542,6 +550,8 @@ class Network:
             return df
         
         else:
+            from loky import get_reusable_executor
+
             df = from_arr.to_pandas()
             df = pd.DataFrame(df["node_id"].unique(), columns=["node_id"])
             df_split = np.array_split(df, num_processes)
@@ -550,12 +560,15 @@ class Network:
             # need to go back to polars for aggregate function
             df_split = [pl.from_pandas(df) for df in df_split]
 
-            args_list = [
-                (df, to_dataset_name, search_distance, from_registered_dataset, num_points, include_ids) for df in df_split
+            executor = get_reusable_executor(max_workers=num_processes)
+            futures = [
+                executor.submit(
+                    self._run_nearest_points_of_interest,
+                    df, to_dataset_name, search_distance, from_registered_dataset, num_points, include_ids
+                )
+                for df in df_split
             ]
-
-            with Pool(processes=num_processes) as pool:
-                results = pool.starmap(self._run_nearest_points_of_interest, args_list)
+            results = [f.result() for f in futures]
 
             merged_df = nw.concat(results)
             #merged_df = merged_df.sort(pl.col(registered_dataset.id_col))
@@ -565,85 +578,6 @@ class Network:
             print(f"Elapsed time: {elapsed_time:.4f} seconds")
             return merged_df
             
-
-
-        #     return nw.from_native(df)
-
-        #     # for each from node, find the shortest path to all other nodes within the distance
-        #     for node_id in from_arr:
-        #         length = nx.single_source_dijkstra_path_length(
-        #             self.graph, node_id, cutoff=search_distance, weight="weight"
-        #         )
-        #         rows = [(node_id, k, v) for k, v in length.items()]
-        #         data.extend(rows)
-
-        # # Create DataFrame in the same backend as the registered datasets
-        # reachable_nodes = pl.DataFrame(
-        #     data, schema=["node_id", "target_node_id", "distance"]
-        # )
-
-        # reachable_nodes = nw.from_native(reachable_nodes)
-
-        # reachable_nodes = reachable_nodes.filter(
-        #     nw.col("target_node_id").is_in(to_registered_dataset.df["node_id"])
-        # )
-
-        # # For each node_id, keep only the num_points closest points based on distance
-        # reachable_nodes = (
-        #     reachable_nodes.sort(["node_id", "distance"])
-        #     .with_row_index("row_num")
-        #     .with_columns(
-        #         nw.col("row_num").rank(method="ordinal").over("node_id").alias("rank")
-        #     )
-        #     .filter(nw.col("rank") <= num_points)
-        #     .drop("row_num", "rank")
-        # )
-
-        # # Assert that no node_id has more than num_points destinations
-        # # max_count = reachable_nodes.value_counts("node_id")
-        # # assert max_count <= num_points, f"Found node_id with {max_count} destinations, expected max {num_points}"
-
-        # if include_ids:
-        #     to_df = to_registered_dataset.df
-        #     if not to_df.implementation.is_polars():
-        #         to_df = nw.from_native(to_df).to_polars()
-        #         to_df = nw.from_native(to_df)
-
-        #     reachable_nodes = reachable_nodes.join(
-        #         to_df.select([to_registered_dataset.id_col, "node_id"]),
-        #         left_on="target_node_id",
-        #         right_on="node_id",
-        #         how="left",
-        #     )
-
-        #     # make sure there is only one row per node_id and to_registered_dataset.id_col
-        #     reachable_nodes = reachable_nodes.group_by(
-        #         ["node_id", to_registered_dataset.id_col]
-        #     ).agg(nw.col("target_node_id").first(), nw.col("distance").first())
-
-        #     if from_dataset_name:
-        #         from_df = from_registered_dataset.df
-        #         reachable_nodes = reachable_nodes.filter(
-        #             nw.col("node_id").is_in(from_df["node_id"])
-        #         )
-        #         if not from_df.implementation.is_polars():
-        #             from_df = nw.from_native(from_df).to_polars()
-        #             from_df = nw.from_native(from_df)
-        #         reachable_nodes = reachable_nodes.join(
-        #             from_df.select([from_registered_dataset.id_col, "node_id"]),
-        #             left_on="node_id",
-        #             right_on="node_id",
-        #             how="left",
-        #         )
-        #         reachable_nodes = reachable_nodes.group_by(
-        #             [
-        #                 "node_id",
-        #                 from_registered_dataset.id_col,
-        #                 to_registered_dataset.id_col,
-        #             ]
-        #         ).agg(nw.col("target_node_id").first(), nw.col("distance").first())
-
-        # return reachable_nodes
 
     def _run_nearest_points_of_interest(
         self,
@@ -735,7 +669,3 @@ class Network:
         return reachable_nodes
 
         print("done")
-
-
-if __name__ == "__main__":
-    freeze_support()

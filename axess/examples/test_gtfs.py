@@ -79,6 +79,5 @@ pandas_test.register_dataset(
         "stops", stops_df, "stop_id", "x", "y"
     )   
     
-if __name__ == "__main__":
-    df = pandas_test.nearest_points_of_interest("stops", from_dataset_name="parcels", num_processes=2, search_distance=5280, num_points=3, include_ids=True)
-    print ('done')
+df = pandas_test.nearest_points_of_interest("stops", from_dataset_name="parcels", num_processes=2, search_distance=5280, num_points=3, include_ids=True)
+print('done')
