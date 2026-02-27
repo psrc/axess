@@ -452,7 +452,7 @@ class Network:
         )
         if decay_type == "exponential":
             df = df.with_columns(
-                np.exp(-1 * pl.col(distance_column) / (max_distance * 0.5)).alias(
+                np.exp(-1 * pl.col(distance_column) / max_distance ).alias(
                     "decay_weight"
                 )
             )
