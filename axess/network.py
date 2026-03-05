@@ -80,7 +80,7 @@ def dataframe_type_returner(func):
 
     def wrapper(self, *args, **kwargs):
         result = func(self, *args, **kwargs)
-        dataframe_type = self.registered_data[args[0]].df_type
+        dataframe_type = self.registered_data[kwargs["to_dataset_name"]].df_type
         # If result is a DataFrame, convert it to match the Network's dataframe_type
         if (
             hasattr(result, "to_pandas")
@@ -364,85 +364,7 @@ class Network:
         travelsheds = gpd.GeoDataFrame(travelshed_rows, geometry="geometry")
         return travelsheds
 
-    def _aggregate_run(
-        self, name, agg_dict, distance, arr, agg_func="sum", decay_func=None
-    ):
-        """Internal method to perform aggregation calculations.
-
-        Calculates accessibility by finding all reachable nodes within the specified
-        distance and aggregating attribute values from the registered dataset.
-
-        Args:
-            name: Name of the registered dataset
-            agg_dict: Dictionary specifying aggregation functions for each column
-            distance: Maximum travel distance
-            arr: Array of node IDs to process
-            agg_func: Aggregation function ('sum' or 'mean')
-            decay: Decay function to apply to distances (None, 'exponential' or 'linear')
-        Returns:
-            DataFrame with aggregated values for each input node
-
-        Raises:
-            ValueError: If dataset name not found
-        """
-        #agg_dict = self._create_aggregation_dict(columns, agg_func)
-
-        if name not in self.registered_data:
-            raise ValueError(f"Data set '{name}' not found.")
-        registered_dataset = self.registered_data[name]
-        data = []
-        arr = arr["node_id"].unique().to_numpy()
-
-        # for each node, find the shortest path to all other nodes within the distance
-        for node_id in arr:
-            length = nx.single_source_dijkstra_path_length(
-                self.graph, node_id, cutoff=distance, weight="weight"
-            )
-            rows = [(node_id, k, v) for k, v in length.items()]
-            data.extend(rows)
-
-        # convert results to DataFrame
-        reachable_nodes = pl.DataFrame(
-            data, schema=["node_id", "target_node_id", "distance"]
-        )
-
-        # only keep the target nodes that are in the registered_dataset.df
-        reachable_nodes = reachable_nodes.filter(
-            pl.col("target_node_id").is_in(registered_dataset.df["node_id"])
-        )
-
-        # get the registered_dataset.df and aggregate by node_id because
-        # multiple points of data could be associated with the same node.
-        # Need to aggregate their attributes of interest before joining
-        # to reachable_nodes
-
-        data_to_aggregate = pl.DataFrame(
-            registered_dataset.df.select(
-                [registered_dataset.id_col, "node_id"] + list(agg_dict.keys())
-            )
-        )
-        aggregated_to_nodes = data_to_aggregate.group_by("node_id").agg(**agg_dict)
-
-        # join aggregated data to reachable_nodes
-        reachable_nodes = reachable_nodes.join(
-            aggregated_to_nodes,
-            left_on="target_node_id",
-            right_on="node_id",
-            how="inner",
-        )
-
-        # aggregate attributes by node_id. performs aggregation of data
-        # for all reachable nodes.
-        if decay_func:
-            reachable_nodes = self._apply_decay_function(
-                reachable_nodes, "distance", distance, decay_func, list(agg_dict.keys())
-            )
-
-        reachable_nodes = reachable_nodes.group_by("node_id").agg(**agg_dict)
-
-        return data_to_aggregate.select([registered_dataset.id_col, "node_id"]).join(
-            reachable_nodes, on="node_id", how="inner"
-        )
+    
 
     def _apply_decay_function(
         self, df, distance_column, max_distance, decay_type, var_columns
@@ -452,7 +374,7 @@ class Network:
         )
         if decay_type == "exponential":
             df = df.with_columns(
-                np.exp(-1 * pl.col(distance_column) / max_distance ).alias(
+                np.exp(-1 * pl.col(distance_column) / max_distance).alias(
                     "decay_weight"
                 )
             )
@@ -468,10 +390,17 @@ class Network:
             )
         return df
 
-    # @timer_func
+
     @dataframe_type_returner
     def aggregate(
-        self, name, distance, columns = None, columns_agg_dict = None, num_processes=1, agg_func="sum", decay_func=None
+        self,
+        distance,
+        to_dataset_name,
+        columns,
+        from_dataset_name=None,
+        num_processes=1,
+        agg_func="sum",
+        decay_func=None,
     ):
         """Aggregate data within travel distance of points in a registered dataset.
 
@@ -496,24 +425,25 @@ class Network:
         """
 
         start_time = time.perf_counter()
-        registered_dataset = self.registered_data[name]
-        
-        if columns:
-            columns_agg_dict = self._create_aggregation_dict(columns, agg_func)
-        elif columns_agg_dict:
-            columns_agg_dict = self._create_aggregation_dict(columns_agg_dict)
+        to_registered_dataset = self.registered_data[to_dataset_name]
+        if from_dataset_name:
+            from_registered_dataset = self.registered_data[from_dataset_name]
+            arr = from_registered_dataset.df.select([to_registered_dataset.id_col, "node_id"])
         else:
-            raise ValueError("Either columns or columns_agg_dict must be provided.")
+            from_registered_dataset = None
+            arr = self.nodes.select(["node_id"])
+    
+        columns_agg_dict = self._create_aggregation_dict(columns, agg_func)
 
         if num_processes == 1:
-            arr = registered_dataset.df.select([registered_dataset.id_col, "node_id"])
-            df = self._aggregate_run(name, columns_agg_dict, distance, arr, agg_func, decay_func)
-            return nw.from_native(df.sort(pl.col(registered_dataset.id_col)))
+            
+            df = self._aggregate_run(distance, columns_agg_dict, to_dataset_name, arr, decay_func=decay_func)
+            return nw.from_native(df.sort(pl.col(to_registered_dataset.id_col)))
 
         else:
             from loky import get_reusable_executor
 
-            df = registered_dataset.df.to_pandas()
+            df = arr.to_pandas()
             df = pd.DataFrame(df["node_id"].unique(), columns=["node_id"])
             df_split = np.array_split(df, num_processes)
             df_split = [pd.DataFrame(a, columns=df.columns) for a in df_split]
@@ -524,19 +454,117 @@ class Network:
             executor = get_reusable_executor(max_workers=num_processes)
             futures = [
                 executor.submit(
-                    self._aggregate_run, name, columns_agg_dict, distance, df, agg_func, decay_func
+                    self._aggregate_run,
+                    distance,
+                    columns_agg_dict,
+                    to_dataset_name,
+                    df,
+                    decay_func=decay_func,
                 )
                 for df in df_split
             ]
             results = [f.result() for f in futures]
 
             merged_df = pl.concat(results)
-            merged_df = merged_df.sort(pl.col(registered_dataset.id_col))
+            merged_df = merged_df.sort(pl.col(to_registered_dataset.id_col))
 
             end_time = time.perf_counter()
             elapsed_time = end_time - start_time
             print(f"Elapsed time: {elapsed_time:.4f} seconds")
             return nw.from_native(merged_df)
+    
+    def _aggregate_run(
+        self, distance, agg_dict, to_dataset_name, arr, from_dataset_name=None, decay_func=None
+    ):
+        """Internal method to perform aggregation calculations.
+
+        Calculates accessibility by finding all reachable nodes within the specified
+        distance and aggregating attribute values from the registered dataset.
+
+        Args:
+            distance: Maximum travel distance
+            agg_dict: Dictionary specifying aggregation functions for each column
+            to_dataset_name: Name of the registered dataset
+            arr: DataFrame of node IDs to process
+            from_dataset_name: Name of the source dataset (optional)
+            decay_func: Decay function to apply to distances (None, 'exponential' or 'linear')
+
+        Returns:
+            DataFrame with aggregated values for each input node
+
+        Raises:
+            ValueError: If dataset name not found
+        """
+        # agg_dict = self._create_aggregation_dict(columns, agg_func)
+
+        if to_dataset_name not in self.registered_data:
+            raise ValueError(f"Data set '{to_dataset_name}' not found.")
+        to_registered_dataset = self.registered_data[to_dataset_name]
+        data = []
+        arr = arr["node_id"].unique().to_numpy()
+
+        # for each node, find the shortest path to all other nodes within the distance
+        for node_id in arr:
+            length = nx.single_source_dijkstra_path_length(
+                self.graph, node_id, cutoff=distance, weight="weight"
+            )
+            rows = [(node_id, k, v) for k, v in length.items()]
+            data.extend(rows)
+
+        # convert results to DataFrame
+        reachable_nodes = pl.DataFrame(
+            data, schema=["node_id", "target_node_id", "distance"]
+        )
+
+        # only keep the target nodes that are in the registered_dataset.df
+        reachable_nodes = reachable_nodes.filter(
+            pl.col("target_node_id").is_in(to_registered_dataset.df["node_id"])
+        )
+
+        # get the registered_dataset.df and aggregate by node_id because
+        # multiple points of data could be associated with the same node.
+        # Need to aggregate their attributes of interest before joining
+        # to reachable_nodes
+
+        data_to_aggregate = pl.DataFrame(
+            to_registered_dataset.df.select(
+                [to_registered_dataset.id_col, "node_id"] + list(agg_dict.keys())
+            )
+        )
+        aggregated_to_nodes = data_to_aggregate.group_by("node_id").agg(**agg_dict)
+
+        # join aggregated data to reachable_nodes
+        reachable_nodes = reachable_nodes.join(
+            aggregated_to_nodes,
+            left_on="target_node_id",
+            right_on="node_id",
+            how="inner",
+        )
+
+        # aggregate attributes by node_id. performs aggregation of data
+        # for all reachable nodes.
+        if decay_func:
+            reachable_nodes = self._apply_decay_function(
+                reachable_nodes, "distance", distance, decay_func, list(agg_dict.keys())
+            )
+
+        reachable_nodes = reachable_nodes.group_by("node_id").agg(**agg_dict)
+
+        if from_dataset_name:
+            from_registered_dataset = self.registered_data[from_dataset_name]
+            from_df = pl.DataFrame(
+            from_registered_dataset.df.select(
+                [from_registered_dataset.id_col, "node_id"]
+            )
+        )
+            
+            return from_df.join(
+                reachable_nodes, on="node_id", how="inner")
+
+        else:
+            return data_to_aggregate.select([to_registered_dataset.id_col, "node_id"]).join(
+            reachable_nodes, on="node_id", how="inner"
+        )
 
     @dataframe_type_returner
     def nearest_points_of_interest(
@@ -558,10 +586,7 @@ class Network:
             from_arr = self.nodes.select(["node_id"])
             from_registered_dataset = None
 
-        
-
         if num_processes == 1:
-            
             df = self._run_nearest_points_of_interest(
                 from_arr,
                 to_dataset_name,
@@ -571,7 +596,7 @@ class Network:
                 include_ids,
             )
             return df
-        
+
         else:
             from loky import get_reusable_executor
 
@@ -587,20 +612,24 @@ class Network:
             futures = [
                 executor.submit(
                     self._run_nearest_points_of_interest,
-                    df, to_dataset_name, search_distance, from_registered_dataset, num_points, include_ids
+                    df,
+                    to_dataset_name,
+                    search_distance,
+                    from_registered_dataset,
+                    num_points,
+                    include_ids,
                 )
                 for df in df_split
             ]
             results = [f.result() for f in futures]
 
             merged_df = nw.concat(results)
-            #merged_df = merged_df.sort(pl.col(registered_dataset.id_col))
+            # merged_df = merged_df.sort(pl.col(registered_dataset.id_col))
 
             end_time = time.perf_counter()
             elapsed_time = end_time - start_time
             print(f"Elapsed time: {elapsed_time:.4f} seconds")
             return merged_df
-            
 
     def _run_nearest_points_of_interest(
         self,

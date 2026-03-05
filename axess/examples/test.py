@@ -59,6 +59,8 @@ if __name__ == "__main__":
         "parkhr_p",
         "nparks",
     ]
+    agg_columns = {col: "sum" for col in agg_columns}
+    agg_columns['hh_p'] = 'mean'
     network_path = Path(
         f"C:/Users/{user_name}/PSRC/GIS - Sharing/Users/Stefan/axess_data/network"
     )
@@ -98,9 +100,10 @@ if __name__ == "__main__":
     # single process
     pandas_test.register_dataset("parcels", parcels, "parcelid", "xcoord_p", "ycoord_p")
     df = pandas_test.aggregate(
-        "parcels",
-        columns=agg_columns,
         distance=2640,
+        to_dataset_name="parcels",
+        columns=agg_columns,
+        from_dataset_name="parcels",
         num_processes=1,
         agg_func="sum",
         decay_func="exponential",
@@ -111,9 +114,10 @@ if __name__ == "__main__":
         "parcels_mp", parcels, "parcelid", "xcoord_p", "ycoord_p"
     )
     df_mp = pandas_test.aggregate(
-        "parcels_mp",
-        columns=agg_columns,
         distance=2640,
+        to_dataset_name="parcels_mp",
+        columns=agg_columns,
+        from_dataset_name="parcels_mp", 
         num_processes=num_processes,
         agg_func="sum",
         decay_func="exponential"
@@ -135,10 +139,20 @@ if __name__ == "__main__":
 
     polars_test.register_dataset("parcels", parcels, "parcelid", "xcoord_p", "ycoord_p")
     df_polars = polars_test.aggregate(
-        "parcels",
-        columns=agg_columns,
         distance=2640,
+        to_dataset_name="parcels",
+        columns=agg_columns,
+        from_dataset_name="parcels",
         num_processes=1,
+        agg_func="sum",
+        decay_func="exponential"
+    )
+    df_polars_mp = polars_test.aggregate(
+        distance=2640,
+        to_dataset_name="parcels",
+        columns=agg_columns,
+        from_dataset_name="parcels",
+        num_processes=2,
         agg_func="sum",
         decay_func="exponential"
     )
