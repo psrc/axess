@@ -428,7 +428,7 @@ class Network:
         to_registered_dataset = self.registered_data[to_dataset_name]
         if from_dataset_name:
             from_registered_dataset = self.registered_data[from_dataset_name]
-            arr = from_registered_dataset.df.select([to_registered_dataset.id_col, "node_id"])
+            arr = from_registered_dataset.df.select([from_registered_dataset.id_col, "node_id"])
         else:
             from_registered_dataset = None
             arr = self.nodes.select(["node_id"])
